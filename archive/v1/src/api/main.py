@@ -23,6 +23,7 @@ from src.api.middleware.rate_limit import RateLimitMiddleware
 from src.api.dependencies import get_pose_service, get_stream_service, get_hardware_service
 from src.api.websocket.connection_manager import connection_manager
 from src.api.websocket.pose_stream import PoseStreamHandler
+from src.bridge.udp_aggregator import UDPAggregator, get_aggregator
 
 # Configure logging
 settings = get_settings()
@@ -103,6 +104,14 @@ async def start_background_tasks(app: FastAPI):
         if settings.enable_real_time_processing:
             pose_stream_handler = app.state.pose_stream_handler
             await pose_stream_handler.start_streaming()
+
+        # Start ESP32 UDP aggregator (listens on port 5005 for CSI frames)
+        aggregator = UDPAggregator(host='0.0.0.0', port=5005)
+        try:
+            await aggregator.start()
+            app.state.udp_aggregator = aggregator
+        except OSError as e:
+            logger.warning(f"UDP aggregator failed to bind (port 5005 in use?): {e}")
         
         logger.info("Background tasks started")
         
@@ -114,6 +123,10 @@ async def start_background_tasks(app: FastAPI):
 async def cleanup_services(app: FastAPI):
     """Cleanup services on shutdown."""
     try:
+        # Stop UDP aggregator
+        if hasattr(app.state, 'udp_aggregator'):
+            await app.state.udp_aggregator.stop()
+
         # Stop pose streaming
         if hasattr(app.state, 'pose_stream_handler'):
             await app.state.pose_stream_handler.shutdown()
@@ -304,57 +317,222 @@ async def websocket_train_progress(websocket: WebSocket):
 
 @app.websocket("/ws/sensing")
 async def websocket_sensing(websocket: WebSocket):
-    """Stream mock WiFi sensing data to the UI (CSI frames)."""
+    """Stream WiFi sensing data to the UI — real ESP32 data or simulated fallback."""
     import math
     import time as _time
+    from src.bridge.udp_aggregator import get_aggregator
+    from src.bridge.frame_parser import RawCSIFrame, FeatureState
 
     await websocket.accept()
     try:
         while True:
+            aggregator = get_aggregator()
             t = _time.time()
-            base_rssi = -45
-            variance = 1.5 + math.sin(t * 0.1)
-            motion_band = 0.05 + abs(math.sin(t * 0.3)) * 0.15
-            breath_band = 0.03 + abs(math.sin(t * 0.05)) * 0.08
-            is_present = variance > 0.8
 
-            frame = {
-                "type": "sensing_update",
-                "timestamp": t,
-                "source": "live",
-                "nodes": [{
-                    "node_id": 1,
-                    "rssi_dbm": base_rssi + math.sin(t * 0.5) * 3,
-                    "position": [2, 0, 1.5],
-                    "amplitude": [],
-                    "subcarrier_count": 0,
-                }],
-                "features": {
-                    "mean_rssi": base_rssi + math.sin(t * 0.5) * 3,
-                    "variance": variance,
-                    "std": math.sqrt(abs(variance)),
-                    "motion_band_power": motion_band,
-                    "breathing_band_power": breath_band,
-                    "dominant_freq_hz": 0.3 + math.sin(t * 0.02) * 0.1,
-                    "change_points": 0,
-                    "spectral_power": motion_band + breath_band,
-                    "range": variance * 3,
-                    "iqr": variance * 1.5,
-                    "skewness": 0.0,
-                    "kurtosis": 1.0,
-                },
-                "classification": {
-                    "motion_level": "present_still" if is_present else "absent",
-                    "presence": is_present,
-                    "confidence": 0.85 if is_present else 0.6,
-                },
-            }
+            # If we have real ESP32 data, use it
+            if aggregator and aggregator.is_receiving:
+                # Try feature state first (pre-processed on ESP32)
+                if aggregator.feature_states:
+                    fs = aggregator.feature_states[-1]
+                    frame = {
+                        "type": "sensing_update",
+                        "timestamp": t,
+                        "source": "esp32_live",
+                        "nodes": [{
+                            "node_id": fs.node_id,
+                            "rssi_dbm": -45,
+                            "position": [2, 0, 1.5],
+                            "amplitude": [],
+                            "subcarrier_count": 0,
+                        }],
+                        "features": {
+                            "mean_rssi": -45,
+                            "variance": fs.motion_score * 3,
+                            "std": fs.motion_score * 1.5,
+                            "motion_band_power": fs.motion_score,
+                            "breathing_band_power": fs.respiration_conf * 0.2,
+                            "dominant_freq_hz": fs.respiration_bpm / 60.0 if fs.respiration_bpm > 0 else 0.25,
+                            "change_points": 0,
+                            "spectral_power": fs.motion_score + fs.anomaly_score,
+                            "range": fs.motion_score * 5,
+                            "iqr": fs.motion_score * 2,
+                            "skewness": 0.0,
+                            "kurtosis": 1.0,
+                        },
+                        "classification": {
+                            "motion_level": "present_moving" if fs.motion_score > 0.5 else ("present_still" if fs.presence_score > 0.5 else "absent"),
+                            "presence": fs.presence_score > 0.3,
+                            "confidence": fs.presence_score,
+                        },
+                        "vitals": {
+                            "respiration_bpm": fs.respiration_bpm,
+                            "respiration_confidence": fs.respiration_conf,
+                            "heartbeat_bpm": fs.heartbeat_bpm,
+                            "heartbeat_confidence": fs.heartbeat_conf,
+                        },
+                    }
+                # Fall back to raw CSI frames
+                elif aggregator.raw_frames:
+                    raw = aggregator.raw_frames[-1]
+                    amp_std = float(raw.amplitude.std()) if len(raw.amplitude) > 0 else 0
+                    frame = {
+                        "type": "sensing_update",
+                        "timestamp": t,
+                        "source": "esp32_raw",
+                        "nodes": [{
+                            "node_id": raw.node_id,
+                            "rssi_dbm": raw.rssi,
+                            "position": [2, 0, 1.5],
+                            "amplitude": raw.amplitude[:64].tolist(),
+                            "subcarrier_count": raw.num_subcarriers,
+                        }],
+                        "features": {
+                            "mean_rssi": float(raw.rssi),
+                            "variance": amp_std,
+                            "std": amp_std,
+                            "motion_band_power": min(amp_std / 100, 1.0),
+                            "breathing_band_power": 0.05,
+                            "dominant_freq_hz": 0.3,
+                            "change_points": 0,
+                            "spectral_power": amp_std / 50,
+                            "range": amp_std * 3,
+                            "iqr": amp_std * 1.5,
+                            "skewness": 0.0,
+                            "kurtosis": 1.0,
+                        },
+                        "classification": {
+                            "motion_level": "present_still" if amp_std > 10 else "absent",
+                            "presence": amp_std > 10,
+                            "confidence": min(amp_std / 50, 0.95),
+                        },
+                    }
+                else:
+                    await asyncio.sleep(0.1)
+                    continue
+            else:
+                # Simulated fallback when no ESP32 is connected
+                base_rssi = -45
+                variance = 1.5 + math.sin(t * 0.1)
+                motion_band = 0.05 + abs(math.sin(t * 0.3)) * 0.15
+                breath_band = 0.03 + abs(math.sin(t * 0.05)) * 0.08
+                is_present = variance > 0.8
+                frame = {
+                    "type": "sensing_update",
+                    "timestamp": t,
+                    "source": "simulated",
+                    "nodes": [{
+                        "node_id": 1,
+                        "rssi_dbm": base_rssi + math.sin(t * 0.5) * 3,
+                        "position": [2, 0, 1.5],
+                        "amplitude": [],
+                        "subcarrier_count": 0,
+                    }],
+                    "features": {
+                        "mean_rssi": base_rssi + math.sin(t * 0.5) * 3,
+                        "variance": variance,
+                        "std": math.sqrt(abs(variance)),
+                        "motion_band_power": motion_band,
+                        "breathing_band_power": breath_band,
+                        "dominant_freq_hz": 0.3 + math.sin(t * 0.02) * 0.1,
+                        "change_points": 0,
+                        "spectral_power": motion_band + breath_band,
+                        "range": variance * 3,
+                        "iqr": variance * 1.5,
+                        "skewness": 0.0,
+                        "kurtosis": 1.0,
+                    },
+                    "classification": {
+                        "motion_level": "present_still" if is_present else "absent",
+                        "presence": is_present,
+                        "confidence": 0.85 if is_present else 0.6,
+                    },
+                }
+
             await websocket.send_json(frame)
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         logger.info("Sensing WebSocket disconnected")
     except Exception as e:
         logger.warning(f"Sensing WebSocket error: {e}")
+
+
+@app.websocket("/api/v1/stream/pose")
+async def websocket_pose_stream(websocket: WebSocket):
+    """Stream real-time pose inference results to the UI.
+
+    When a model is loaded and ESP32 is sending CSI, this streams predicted
+    keypoints/activity for PoseDetectionCanvas to render.
+    """
+    import time as _time
+    from src.bridge.inference import get_inference_engine
+    from src.bridge.udp_aggregator import get_aggregator
+
+    await websocket.accept()
+    try:
+        while True:
+            engine = get_inference_engine()
+            aggregator = get_aggregator()
+
+            if engine.is_loaded and aggregator and aggregator.raw_frames:
+                # Real inference on latest CSI frame
+                raw = aggregator.raw_frames[-1]
+                result = engine.predict(raw.amplitude)
+                if result:
+                    result["timestamp"] = _time.time()
+                    result["source"] = "esp32_inference"
+                    await websocket.send_json(result)
+                else:
+                    await asyncio.sleep(0.1)
+            elif engine.is_loaded:
+                # Model loaded but no ESP32 data — send idle status
+                await websocket.send_json({
+                    "type": "pose_update",
+                    "timestamp": _time.time(),
+                    "source": "waiting_for_csi",
+                    "persons": [],
+                    "message": "Model loaded, waiting for ESP32 CSI data on UDP:5005",
+                })
+                await asyncio.sleep(1)
+            else:
+                # No model loaded
+                await websocket.send_json({
+                    "type": "pose_update",
+                    "timestamp": _time.time(),
+                    "source": "no_model",
+                    "persons": [],
+                    "message": "No model loaded. Record CSI → Train → Load model to see poses.",
+                })
+                await asyncio.sleep(2)
+
+            await asyncio.sleep(0.05)
+    except WebSocketDisconnect:
+        logger.info("Pose stream WebSocket disconnected")
+    except Exception as e:
+        logger.warning(f"Pose stream WebSocket error: {e}")
+
+
+@app.get(f"{settings.api_prefix}/bridge/status")
+async def bridge_status():
+    """Get ESP32 bridge status (UDP aggregator + inference engine)."""
+    from src.bridge.udp_aggregator import get_aggregator
+    from src.bridge.inference import get_inference_engine
+
+    aggregator = get_aggregator()
+    engine = get_inference_engine()
+
+    return {
+        "udp_aggregator": aggregator.get_stats() if aggregator else {"status": "not_started"},
+        "inference_engine": {
+            "model_loaded": engine.is_loaded,
+            "model_id": engine.model_id,
+            "model_type": engine.model_type,
+            "device": engine.device,
+        },
+        "instructions": {
+            "esp32_setup": "Configure ESP32 firmware: CSI_TARGET_IP=<your_pc_ip>, CSI_TARGET_PORT=5005",
+            "workflow": "1. Record CSI → 2. Train model → 3. Load model → 4. See poses live",
+        },
+    }
 
 
 # Root endpoint
