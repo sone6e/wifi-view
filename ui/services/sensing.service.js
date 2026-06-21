@@ -10,8 +10,8 @@
  */
 
 const SENSING_WS_PORT_BY_HTTP_PORT = {
-  // Docker image: HTTP UI/API on 3000, sensing stream on 3001.
-  '3000': '3001',
+  // UI served on :3000 → sensing WS on backend :8000
+  '3000': '8000',
   // Python sensing stack: UI on 8080, sensing stream on 8765.
   '8080': '8765',
 };
