@@ -69,7 +69,7 @@ async def stop_training():
     """Stop the current training run."""
     _STATE.update(status="idle", progress=0.0, message="training stopped (mock)")
     logger.info("Training stopped (mock)")
-    return {"status": "stopped", **_STATE}
+    return {**_STATE, "status": "stopped"}
 
 
 @router.post("/pretrain")
