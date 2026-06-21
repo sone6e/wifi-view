@@ -39,7 +39,7 @@ jobs:
           - { label: 'ruflo+itar',       flags: '--features ruflo,itar-unrestricted' }
           - { label: 'full+train',       flags: '--features full,train' }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: actions/cache@v4
@@ -59,7 +59,7 @@ jobs:
     name: clippy (-D warnings, --no-deps)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # v2/rust-toolchain.toml pins channel "1.89" with profile "minimal" (no
       # clippy). dtolnay@stable installs clippy on the floating "stable"
       # toolchain, but the override makes cargo use the separate "1.89"
@@ -92,7 +92,7 @@ jobs:
     name: build train_marl bin
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: actions/cache@v4
@@ -126,7 +126,7 @@ jobs:
     name: ITAR / publish guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: publish = false is present (no accidental crates.io publish)
         run: |
           CARGO=v2/crates/ruview-swarm/Cargo.toml
