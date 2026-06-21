@@ -269,14 +269,13 @@ export class DashboardTab {
     return 'normal';
   }
 
-  // Update live statistics
+  // Update live statistics from pose service
   async updateLiveStats() {
     try {
-      const stats = await this.apiService.request('/live-stats');
-      this.render(stats);
-    } catch (err) {
-    // Check if err contains specific info like err.status or err.response
-    console.error('Failed to update live stats:', err);
+      const stats = await poseService.getStats();
+      if (stats) this.updatePoseStats(stats);
+    } catch {
+      // Stats endpoint not available yet — skip silently
     }
   }
 

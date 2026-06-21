@@ -78,10 +78,10 @@ async def list_models():
 
 @router.get("/active")
 async def get_active_model():
-    """Get the currently active model (404 if none loaded)."""
+    """Get the currently active model (null if none loaded)."""
     active_id = _ACTIVE_MODEL["id"]
     if not active_id or active_id not in _MODELS:
-        raise HTTPException(status_code=404, detail="No active model")
+        return None
     return _MODELS[active_id]
 
 

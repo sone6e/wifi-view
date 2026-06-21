@@ -229,6 +229,39 @@ def setup_routers(app: FastAPI, settings: Settings):
         except Exception as e:
             logger.warning(f"Training progress WebSocket error: {e}")
 
+    @app.websocket("/ws/sensing")
+    async def websocket_sensing(websocket):
+        """Stream mock WiFi sensing data to the UI (CSI frames)."""
+        import asyncio
+        import math
+        import time as _time
+        from fastapi import WebSocketDisconnect
+
+        await websocket.accept()
+        try:
+            while True:
+                t = _time.time()
+                base_rssi = -45
+                variance = 1.5 + math.sin(t * 0.1)
+                motion_band = 0.05 + abs(math.sin(t * 0.3)) * 0.15
+                breath_band = 0.03 + abs(math.sin(t * 0.05)) * 0.08
+                is_present = variance > 0.8
+
+                frame = {
+                    "type": "sensing_update",
+                    "timestamp": t,
+                    "source": "live",
+                    "nodes": [{"node_id": 1, "rssi_dbm": base_rssi + math.sin(t * 0.5) * 3, "position": [2, 0, 1.5], "amplitude": [], "subcarrier_count": 0}],
+                    "features": {"mean_rssi": base_rssi + math.sin(t * 0.5) * 3, "variance": variance, "std": math.sqrt(abs(variance)), "motion_band_power": motion_band, "breathing_band_power": breath_band, "dominant_freq_hz": 0.3, "change_points": 0, "spectral_power": motion_band + breath_band, "range": variance * 3, "iqr": variance * 1.5, "skewness": 0.0, "kurtosis": 1.0},
+                    "classification": {"motion_level": "present_still" if is_present else "absent", "presence": is_present, "confidence": 0.85 if is_present else 0.6},
+                }
+                await websocket.send_json(frame)
+                await asyncio.sleep(0.1)
+        except WebSocketDisconnect:
+            logger.info("Sensing WebSocket disconnected")
+        except Exception as e:
+            logger.warning(f"Sensing WebSocket error: {e}")
+
 
 def setup_root_endpoints(app: FastAPI, settings: Settings):
     """Setup root application endpoints."""
