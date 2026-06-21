@@ -1,0 +1,5 @@
+# Ignore recorded data and trained models (large binary files)
+recordings/*.npz
+models/*.rvf
+# Keep directory structure
+!.gitkeep
