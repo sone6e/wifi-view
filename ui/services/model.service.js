@@ -45,7 +45,7 @@ export class ModelService {
 
   async listModels() {
     try {
-      const data = await apiService.get('/api/v1/models');
+      const data = await apiService.get('/models');
       this.logger.info('Listed models', { count: data?.models?.length ?? 0 });
       return data;
     } catch (error) {
@@ -56,7 +56,7 @@ export class ModelService {
 
   async getModel(id) {
     try {
-      const data = await apiService.get(`/api/v1/models/${encodeURIComponent(id)}`);
+      const data = await apiService.get(`/models/${encodeURIComponent(id)}`);
       return data;
     } catch (error) {
       this.logger.error('Failed to get model', { id, error: error.message });
@@ -67,7 +67,7 @@ export class ModelService {
   async loadModel(modelId) {
     try {
       this.logger.info('Loading model', { modelId });
-      const data = await apiService.post('/api/v1/models/load', { model_id: modelId });
+      const data = await apiService.post('/models/load', { model_id: modelId });
       this.activeModel = { model_id: modelId };
       this.emit('model-loaded', { model_id: modelId });
       return data;
@@ -80,7 +80,7 @@ export class ModelService {
   async unloadModel() {
     try {
       this.logger.info('Unloading model');
-      const data = await apiService.post('/api/v1/models/unload', {});
+      const data = await apiService.post('/models/unload', {});
       this.activeModel = null;
       this.emit('model-unloaded', {});
       return data;
@@ -92,7 +92,7 @@ export class ModelService {
 
   async getActiveModel() {
     try {
-      const data = await apiService.get('/api/v1/models/active');
+      const data = await apiService.get('/models/active');
       this.activeModel = data || null;
       return this.activeModel;
     } catch (error) {
@@ -109,7 +109,7 @@ export class ModelService {
     try {
       this.logger.info('Activating LoRA profile', { modelId, profileName });
       const data = await apiService.post(
-        '/api/v1/models/lora/activate',
+        '/models/lora/activate',
         { model_id: modelId, profile_name: profileName }
       );
       this.emit('lora-activated', { model_id: modelId, profile: profileName });
@@ -122,7 +122,7 @@ export class ModelService {
 
   async getLoraProfiles() {
     try {
-      const data = await apiService.get('/api/v1/models/lora/profiles');
+      const data = await apiService.get('/models/lora/profiles');
       return data?.profiles ?? [];
     } catch (error) {
       this.logger.error('Failed to get LoRA profiles', { error: error.message });
@@ -133,7 +133,7 @@ export class ModelService {
   async deleteModel(id) {
     try {
       this.logger.info('Deleting model', { id });
-      const data = await apiService.delete(`/api/v1/models/${encodeURIComponent(id)}`);
+      const data = await apiService.delete(`/models/${encodeURIComponent(id)}`);
       return data;
     } catch (error) {
       this.logger.error('Failed to delete model', { id, error: error.message });
