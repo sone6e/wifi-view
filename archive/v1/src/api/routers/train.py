@@ -49,7 +49,7 @@ def _start(kind: str, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         started_at=datetime.now().isoformat(),
     )
     logger.info("%s started (mock): %s", kind, config)
-    return {"status": "started", "kind": kind, **_STATE}
+    return {"kind": kind, **_STATE, "status": "started"}
 
 
 @router.get("/status", response_model=TrainingStatus)
