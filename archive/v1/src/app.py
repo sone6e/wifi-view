@@ -18,7 +18,7 @@ from src.services.orchestrator import ServiceOrchestrator
 from src.middleware.auth import AuthenticationMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
 from src.middleware.error_handler import ErrorHandlingMiddleware
-from src.api.routers import pose, stream, health
+from src.api.routers import pose, stream, health, models, train, recording
 from src.api.websocket.connection_manager import connection_manager
 
 logger = logging.getLogger(__name__)
@@ -194,6 +194,40 @@ def setup_routers(app: FastAPI, settings: Settings):
         prefix=f"{settings.api_prefix}/stream",
         tags=["Streaming"]
     )
+
+    app.include_router(
+        models.router,
+        prefix=f"{settings.api_prefix}/models",
+        tags=["Models"]
+    )
+
+    app.include_router(
+        train.router,
+        prefix=f"{settings.api_prefix}/train",
+        tags=["Training"]
+    )
+
+    app.include_router(
+        recording.router,
+        prefix=f"{settings.api_prefix}/recording",
+        tags=["Recording"]
+    )
+
+    @app.websocket("/ws/train/progress")
+    async def websocket_train_progress(websocket):
+        """Stream training progress to the UI (mock: emits current training state)."""
+        import asyncio
+        from fastapi import WebSocketDisconnect
+
+        await websocket.accept()
+        try:
+            while True:
+                await websocket.send_json(train._STATE)
+                await asyncio.sleep(1)
+        except WebSocketDisconnect:
+            logger.info("Training progress WebSocket disconnected")
+        except Exception as e:
+            logger.warning(f"Training progress WebSocket error: {e}")
 
 
 def setup_root_endpoints(app: FastAPI, settings: Settings):
