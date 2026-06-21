@@ -8,7 +8,7 @@ import logging.config
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config.settings import get_settings
 from src.config.domains import get_domain_config
-from src.api.routers import pose, stream, health, auth
+from src.api.routers import pose, stream, health, auth, models, train, recording
 from src.api.middleware.auth import AuthMiddleware
 from src.api.middleware.rate_limit import RateLimitMiddleware
 from src.api.dependencies import get_pose_service, get_stream_service, get_hardware_service
@@ -268,6 +268,38 @@ app.include_router(
     prefix=f"{settings.api_prefix}",
     tags=["Authentication"]
 )
+
+app.include_router(
+    models.router,
+    prefix=f"{settings.api_prefix}/models",
+    tags=["Models"]
+)
+
+app.include_router(
+    train.router,
+    prefix=f"{settings.api_prefix}/train",
+    tags=["Training"]
+)
+
+app.include_router(
+    recording.router,
+    prefix=f"{settings.api_prefix}/recording",
+    tags=["Recording"]
+)
+
+
+@app.websocket("/ws/train/progress")
+async def websocket_train_progress(websocket: WebSocket):
+    """Stream training progress to the UI (mock: emits current training state)."""
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.send_json(train._STATE)
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        logger.info("Training progress WebSocket disconnected")
+    except Exception as e:
+        logger.warning(f"Training progress WebSocket error: {e}")
 
 
 # Root endpoint
